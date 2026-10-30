@@ -13,8 +13,9 @@ from spikee.utilities.llm import get_llm
 from spikee.utilities.llm_message import HumanMessage, SystemMessage
 from spikee.utilities.modules import extract_json_or_fail
 
-from . import renderer
-from .progress import report, waiting
+from . import docx
+from ._progress import report, waiting
+from .artifacts import sha256_file
 
 VERSION = 2
 _LOCK = threading.RLock()
@@ -33,7 +34,7 @@ def save_json(path, value):
 
 
 def index_document(source, cache_dir):
-    digest = renderer._sha256_file(source)
+    digest = sha256_file(source)
     path = cache_dir / f"index-v{VERSION}-{digest}.json"
     with _LOCK:
         if path.exists():
@@ -50,12 +51,12 @@ def index_document(source, cache_dir):
                 if (i + 1) % 20 == 0 or i + 1 == len(reader.pages):
                     report(f"Extracted page {i + 1}/{len(reader.pages)}")
         elif source.suffix.lower() == ".docx":
-            renderer._validate_docx(source)
+            docx._validate_docx(source)
             with zipfile.ZipFile(source) as archive:
-                xml = archive.read(renderer.DOCUMENT_XML).decode("utf-8")
+                xml = archive.read(docx.DOCUMENT_XML).decode("utf-8")
             units = [
                 {"id": i + 1, "text": text}
-                for i, (_, _, text) in enumerate(renderer._docx_paragraph_ranges(xml))
+                for i, (_, _, text) in enumerate(docx._docx_paragraph_ranges(xml))
             ]
             if not units:
                 raise ValueError(

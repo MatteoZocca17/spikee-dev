@@ -1,9 +1,9 @@
 """Artifact records use strings so they survive Spikee JSONL serialization."""
 
+import hashlib
 import json
+import re
 from pathlib import Path
-
-from .renderer import _sha256_file
 
 PREFIX = "SPIKEE_DOCUMENT_V1:"
 
@@ -27,8 +27,21 @@ def inspect_record(content):
             "Document artifact record requires a file path and SHA-256 hash"
         )
     path = Path(record["generated_file"])
-    if not path.is_file() or _sha256_file(path) != record["artifact_sha256"]:
+    if not path.is_file() or sha256_file(path) != record["artifact_sha256"]:
         raise ValueError(
             "Generated artifact is missing or has changed; regenerate the dataset"
         )
     return f"Validated document artifact: {path}", record
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def safe_name(value: str) -> str:
+    result = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-_")
+    return result or "document"

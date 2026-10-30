@@ -5,11 +5,18 @@ from spikee.templates.target import Target
 
 class DocumentArtifact(Target):
     def get_description(self):
-        return [], "Validate Document Forge artifact paths and hashes"
+        return (
+            [],
+            "Check artifact integrity; success means intact file, not attack success",
+        )
 
     def process_input(self, input_text, system_message=None, target_options=None):
-        from spikee.document_engine.artifacts import inspect_record
+        from spikee.utilities.documents.artifacts import inspect_record
 
         if target_options:
             raise ValueError("document_artifact does not take target options")
-        return inspect_record(input_text)
+        try:
+            _, record = inspect_record(input_text)
+        except ValueError as exc:
+            return False, {"check": "artifact_integrity", "reason": str(exc)}
+        return True, {"check": "artifact_integrity", "record": record}

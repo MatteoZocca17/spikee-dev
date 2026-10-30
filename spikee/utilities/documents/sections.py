@@ -8,8 +8,8 @@ from spikee.utilities.llm import get_llm
 from spikee.utilities.llm_message import HumanMessage, SystemMessage
 from spikee.utilities.modules import extract_json_or_fail
 
-from .planner import _LOCK, save_json
-from .progress import report, waiting
+from ._progress import report, waiting
+from .placement import _LOCK, save_json
 
 
 def classify_section(payload, model, cache_dir):

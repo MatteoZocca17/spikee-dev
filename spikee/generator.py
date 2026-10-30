@@ -12,6 +12,7 @@ from pathlib import Path
 from tabulate import tabulate
 from tqdm import tqdm
 
+from spikee.templates.plugin import FatalPluginError
 from spikee.utilities.enums import EntryType
 from spikee.utilities.files import (
     compact_filename_part,
@@ -425,6 +426,28 @@ def get_plugin_variants(plugin_module, plugin_option):
         return 1
 
 
+def _is_terminal(module) -> bool:
+    return bool(getattr(module, "TERMINAL_OUTPUT", False))
+
+
+def validate_terminal_plugins(plugins) -> list[str]:
+    """Validate opaque-output pipe positions before executing any plugin."""
+    terminal_names = []
+    for name, module in plugins:
+        chain = module if name and "~" in name else [(name, module)]
+        for index, (sub_name, sub_module) in enumerate(chain):
+            if not _is_terminal(sub_module):
+                continue
+            if index != len(chain) - 1:
+                print(
+                    f"[ERROR] Plugin '{sub_name}' produces a terminal reference and "
+                    f"must be the last element of a pipe ('{name}')"
+                )
+                sys.exit(1)
+            terminal_names.append(sub_name)
+    return terminal_names
+
+
 def apply_plugin(
     plugin_name,
     plugin_module,
@@ -478,6 +501,8 @@ def apply_plugin(
 
                 try:
                     res = module.transform(**args)
+                except FatalPluginError:
+                    raise
                 except Exception as e:  # noqa: BLE001
                     print(f"\n[WARNING] Plugin '{name}' failed on entry, skipping: {e}")
                     continue
@@ -712,7 +737,7 @@ def _process_permutation_worker(
                                     exclude_from_transformations_regex=local_exclude,
                                 )
                                 entries.append(entry)
-    except ValueError:
+    except (ValueError, FatalPluginError):
         raise
     except Exception as e:  # noqa: BLE001
         print(f"\n[ERROR] Processing permutation failed: {e}")
@@ -824,7 +849,7 @@ def _process_standalone_worker(perm, plugin_options_map) -> list[Entry]:
                 entry.payload = original_raw
             entries.append(entry)
 
-    except ValueError:
+    except (ValueError, FatalPluginError):
         raise
     except Exception as e:  # noqa: BLE001
         print(f"\n[ERROR] Processing standalone attack failed: {e}")
@@ -1082,6 +1107,9 @@ def generate_variations(
                         entries = future.result()
                         dataset.extend(entries)
                         bar.update(1)
+                    except FatalPluginError:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise
                     except Exception as e:  # noqa: BLE001
                         perm = futures[future]
                         print(
@@ -1312,6 +1340,34 @@ def generate_dataset(args):
 
     # Load user-defined plugins
     plugins = load_plugins(args.plugins)
+    terminal_names = validate_terminal_plugins(plugins)
+    if terminal_names:
+        names = ", ".join(terminal_names)
+        if any(item is not None for item in adv_prefixes + adv_suffixes):
+            print(
+                f"[ERROR] Terminal plugin(s) {names} are incompatible with "
+                "prefixes/suffixes (--include-fixes): remove the fixes or run "
+                "them in a separate generation"
+            )
+            sys.exit(1)
+        if base_docs and jailbreaks and instructions:
+            print(
+                f"[ERROR] Terminal plugin(s) {names} cannot be applied to document "
+                "entries: use a seed folder with empty base_user_inputs/jailbreaks/"
+                "instructions, or exclude them via --instruction-filter/--jailbreak-filter"
+            )
+            sys.exit(1)
+        if not getattr(args, "include_standalone_inputs", False):
+            print(
+                f"[ERROR] Terminal plugin(s) {names} require --include-standalone-inputs"
+            )
+            sys.exit(1)
+        if not getattr(args, "plugin_only", False):
+            print(
+                f"[ERROR] Terminal plugin(s) {names} require --plugin-only; "
+                "otherwise untransformed entries are added to the dataset"
+            )
+            sys.exit(1)
 
     # Load system message config
     system_message_config = (
@@ -1354,6 +1410,9 @@ def generate_dataset(args):
                 plugin_only=args.plugin_only,
                 num_threads=getattr(args, "threads", 1),
             )
+    except FatalPluginError as e:
+        print(f"[ERROR] {e}")
+        sys.exit(1)
     except ImportError as e:
         print(f"Missing dependency: {e}")
         sys.exit(1)
@@ -1440,6 +1499,7 @@ def generate_plugin(args):
 
     plugin_options_map = parse_plugin_options(args.plugin_options)
     plugins = load_plugins(args.plugins)
+    validate_terminal_plugins(plugins)
 
     if len(plugins) == 0:
         print(
@@ -1456,9 +1516,13 @@ def generate_plugin(args):
     print("----------------------------------------------")
     for plugin_name, module in plugins:
         for _ in range(iterations):
-            output = apply_plugin(
-                plugin_name, module, text, exclude_patterns, plugin_options_map
-            )
+            try:
+                output = apply_plugin(
+                    plugin_name, module, text, exclude_patterns, plugin_options_map
+                )
+            except FatalPluginError as e:
+                print(f"[ERROR] {e}")
+                sys.exit(1)
 
             if len(output) == 1:
                 print(f"{plugin_name}|{counter}: {output[0]}")

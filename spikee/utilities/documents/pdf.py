@@ -1,40 +1,19 @@
-"""Deterministic PDF and DOCX rendering for Document Forge."""
+"""PDF text and image insertion with source-layout preservation."""
 
-import hashlib
 import io
-import re
-import xml.etree.ElementTree as ET
-import zipfile
-from html import unescape
+import math
 from pathlib import Path
 from typing import Any
-from xml.sax.saxutils import escape
 
 import reportlab
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import FloatObject, RectangleObject
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-DOCUMENT_XML = "word/document.xml"
-DOCX_CONTENT_TYPES = "[Content_Types].xml"
-WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 PDF_TECHNIQUES = {"invisible_text", "white_text", "tiny_text", "visible_text"}
-DOCX_TECHNIQUES = {"hidden_text", "white_text", "tiny_text", "visible_text"}
-
-
-def _safe_name(value: str) -> str:
-    result = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-_")
-    return result or "document"
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _font_name() -> str:
@@ -259,93 +238,26 @@ def _inject_pdf(
     }
 
 
-def _validate_docx(path: Path) -> None:
-    if not zipfile.is_zipfile(path):
-        raise ValueError(f"Not a valid DOCX ZIP package: {path}")
-    with zipfile.ZipFile(path) as archive:
-        required = {DOCX_CONTENT_TYPES, DOCUMENT_XML}
-        if not required.issubset(archive.namelist()):
-            raise ValueError(f"DOCX is missing required package parts: {path}")
-        for name in required:
-            try:
-                ET.fromstring(archive.read(name))
-            except ET.ParseError as error:
-                raise ValueError(
-                    f"DOCX contains malformed XML in {name}: {path}"
-                ) from error
-
-
-def _docx_paragraph(payload: str, technique: str) -> str:
-    for character in payload:
-        code = ord(character)
-        if not (
-            code in (9, 10, 13)
-            or 0x20 <= code <= 0xD7FF
-            or 0xE000 <= code <= 0xFFFD
-            or 0x10000 <= code <= 0x10FFFF
-        ):
-            raise ValueError(
-                f"DOCX payload contains an XML-invalid character U+{code:04X}"
-            )
-    text = escape(payload)
-    if technique == "hidden_text":
-        properties = "<w:rPr><w:vanish/></w:rPr>"
-    elif technique == "white_text":
-        properties = '<w:rPr><w:color w:val="FFFFFF"/><w:sz w:val="12"/></w:rPr>'
-    elif technique == "tiny_text":
-        properties = '<w:rPr><w:color w:val="D9D9D9"/><w:sz w:val="2"/></w:rPr>'
-    else:
-        properties = '<w:rPr><w:b/><w:sz w:val="20"/></w:rPr>'
-    return f'<w:p><w:r>{properties}<w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
-
-
-def _paragraph_text(xml: str) -> str:
-    values = re.findall(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", xml, flags=re.DOTALL)
-    text = "".join(re.sub(r"<[^>]+>", "", value) for value in values)
-    return re.sub(r"\s+", " ", unescape(text)).strip()
-
-
-def _docx_paragraph_ranges(xml: str) -> list[tuple[int, int, str]]:
-    ranges = []
-    for match in re.finditer(r"<w:p(?:\s[^>]*)?>.*?</w:p>", xml, flags=re.DOTALL):
-        ranges.append((match.start(), match.end(), _paragraph_text(match.group(0))))
-    return ranges
-
-
-def _select_docx_offset(
-    xml: str,
-    position: str,
-    anchor: str | None,
-    occurrence: int,
-    relative: str,
-) -> tuple[int, str | None]:
-    body_start_match = re.search(r"<w:body(?:\s[^>]*)?>", xml)
-    body_end = xml.rfind("</w:body>")
-    if not body_start_match or body_end < 0:
-        raise ValueError("Could not locate the DOCX body")
-    if position == "start":
-        return body_start_match.end(), None
-    if position == "end":
-        section = xml.rfind("<w:sectPr", body_start_match.end(), body_end)
-        return (section if section >= 0 else body_end), None
-    if position in {"anchor", "auto"}:
-        if not anchor:
-            raise ValueError(f"position={position} requires a resolvable anchor")
-        matches = [
-            item
-            for item in _docx_paragraph_ranges(xml)
-            if anchor.casefold() in item[2].casefold()
-        ]
-        if not matches:
-            raise ValueError(f"DOCX anchor not found: {anchor!r}")
-        if occurrence < 1 or occurrence > len(matches):
-            raise ValueError(
-                f"anchor_occurrence={occurrence} is invalid; found {len(matches)} match(es)"
-            )
-        start, end, matched_text = matches[occurrence - 1]
-        if relative not in {"before", "after"}:
-            raise ValueError("relative must be 'before' or 'after'")
-        return (start if relative == "before" else end), matched_text
-    if position == "page":
-        raise ValueError("position=page is only supported for PDF sources")
-    raise ValueError(f"Unsupported DOCX position: {position}")
+def add_pdf_image(page, png, dimensions):
+    if page.rotation:
+        page.transfer_rotation_to_content()
+    width = float(page.cropbox.width) - 48
+    if width <= 0:
+        raise ValueError("PDF page is too narrow for an image")
+    height = width * dimensions[1] / dimensions[0]
+    if height > 3000:
+        raise ValueError(
+            "Image is too tall for readable PDF placement; shorten the entry"
+        )
+    # Reuse the renderer's crop-preserving reserved band.
+    band, _ = _add_visible_pdf_text(page, "\n" * math.ceil(height / 10))
+    stream = io.BytesIO()
+    pdf = canvas.Canvas(stream, pagesize=(float(page.cropbox.width), band))
+    pdf.drawImage(ImageReader(io.BytesIO(png)), 24, 24, width=width, height=height)
+    pdf.save()
+    page.merge_transformed_page(
+        PdfReader(stream).pages[0],
+        Transformation().translate(
+            float(page.cropbox.left), float(page.cropbox.bottom)
+        ),
+    )

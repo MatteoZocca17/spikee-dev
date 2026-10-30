@@ -10,7 +10,8 @@ from unittest.mock import patch
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
-from spikee.document_engine import artifacts, pipeline, planner, sections
+from spikee.plugins import document_forge
+from spikee.utilities.documents import artifacts, placement, sections
 from spikee.utilities.modules import load_module_from_path
 
 
@@ -28,8 +29,8 @@ class DocumentForgeTests(unittest.TestCase):
                 content='{"unit_id":2,"reason":"Relevant later excerpt"}'
             )
         )
-        with patch.object(planner, "get_llm", return_value=fake):
-            plan = planner.select_plan(
+        with patch.object(placement, "get_llm", return_value=fake):
+            plan = placement.select_plan(
                 self.source, index, self.config, self.root / "cache"
             )
         self.assertEqual(plan["unit_id"], 1)
@@ -59,7 +60,7 @@ class DocumentForgeTests(unittest.TestCase):
     def generate(self, payload="Exact dataset entry"):
         config = self.root / "config.json"
         config.write_text(json.dumps(self.config), encoding="utf-8")
-        value = pipeline.generate(payload, f"config={config}")
+        value = document_forge.generate(payload, f"config={config}")
         return value, artifacts.inspect_record(value)[1]
 
     def test_llm_cache_artifacts_and_unchanged_source(self):
@@ -69,7 +70,7 @@ class DocumentForgeTests(unittest.TestCase):
                 content='{"unit_id":2,"reason":"Substantive business section"}'
             )
         )
-        with patch.object(planner, "get_llm", return_value=fake) as get:
+        with patch.object(placement, "get_llm", return_value=fake) as get:
             value, record = self.generate()
             self.generate("Another payload")
             self.assertEqual(get.call_count, 1)
@@ -80,9 +81,15 @@ class DocumentForgeTests(unittest.TestCase):
         self.assertIn("Exact dataset entry", pdf.pages[1].extract_text())
         target = load_module_from_path("document_artifact", "targets")
         self.assertEqual(
-            target.process_input(value)[1]["generated_file"], record["generated_file"]
+            target.process_input(value)[1]["record"]["generated_file"],
+            record["generated_file"],
         )
+        self.assertTrue(target.process_input(value)[0])
+        self.assertFalse(target.process_input("x " + value)[0])
         Path(record["generated_file"]).write_bytes(b"changed")
+        valid, meta = target.process_input(value)
+        self.assertFalse(valid)
+        self.assertIn("changed", meta["reason"])
         with self.assertRaisesRegex(ValueError, "changed"):
             artifacts.inspect_record(value)
 
@@ -93,7 +100,7 @@ class DocumentForgeTests(unittest.TestCase):
             )
         )
         with (
-            patch.object(planner, "get_llm", return_value=fake),
+            patch.object(placement, "get_llm", return_value=fake),
             self.assertRaisesRegex(ValueError, "outside"),
         ):
             self.generate()
@@ -126,7 +133,7 @@ class DocumentForgeTests(unittest.TestCase):
 
         fake = SimpleNamespace(invoke=invoke)
         with (
-            patch.object(planner, "get_llm", return_value=fake),
+            patch.object(placement, "get_llm", return_value=fake),
             patch.object(sections, "get_llm", return_value=fake),
         ):
             _, a = self.generate("Company Strategy entry A")
@@ -160,7 +167,7 @@ class DocumentForgeTests(unittest.TestCase):
         )
         with patch.object(sections, "get_llm", return_value=fake):
             with patch.object(
-                planner,
+                placement,
                 "get_llm",
                 return_value=SimpleNamespace(
                     invoke=lambda m: SimpleNamespace(
@@ -175,7 +182,7 @@ class DocumentForgeTests(unittest.TestCase):
             self.assertIn("Overall document context", auto["plan"]["objective"])
             self.config["fallback_field"] = "business_profile"
             with patch.object(
-                planner,
+                placement,
                 "get_llm",
                 return_value=SimpleNamespace(
                     invoke=lambda m: SimpleNamespace(
@@ -238,7 +245,7 @@ class DocumentForgeTests(unittest.TestCase):
     def test_plugin_discovery_and_explicit_placement_without_llm(self):
         plugin = load_module_from_path("document_forge", "plugins")
         with patch.object(
-            planner, "get_llm", side_effect=AssertionError("must not call LLM")
+            placement, "get_llm", side_effect=AssertionError("must not call LLM")
         ):
             result = plugin.transform(
                 "Original payload",
@@ -255,7 +262,7 @@ class DocumentForgeTests(unittest.TestCase):
 
     def test_config_type_errors_do_not_call_provider(self):
         with patch.object(
-            planner, "get_llm", side_effect=AssertionError("unexpected provider call")
+            placement, "get_llm", side_effect=AssertionError("unexpected provider call")
         ):
             for changes in (
                 {"model": 123},
@@ -279,7 +286,7 @@ class DocumentForgeTests(unittest.TestCase):
     def test_planner_rejects_non_object_json(self):
         fake = SimpleNamespace(invoke=lambda messages: SimpleNamespace(content="[]"))
         with (
-            patch.object(planner, "get_llm", return_value=fake),
+            patch.object(placement, "get_llm", return_value=fake),
             self.assertRaises(ValueError),
         ):
             self.generate()
@@ -288,7 +295,7 @@ class DocumentForgeTests(unittest.TestCase):
         self.config.update(
             source="source.pdf", position="end", output_dir="output", cache_dir="cache"
         )
-        with patch.object(pipeline.Path, "cwd", return_value=self.root):
+        with patch.object(document_forge.Path, "cwd", return_value=self.root):
             _, record = self.generate()
         self.assertEqual(Path(record["generated_file"]).parent, self.root / "output")
 

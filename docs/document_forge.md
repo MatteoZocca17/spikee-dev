@@ -73,13 +73,43 @@ Use standalone entries in your seed folder and run `spikee generate` with
 `--include-standalone-inputs --plugin-only --plugins document_forge` and the same
 plugin options. Keep the default `--format user-input`. Any text transformations
 must happen before Document Forge. Do not wrap or transform the resulting artifact
-record, or it will no longer be readable by the artifact consumer.
+record. Both generation commands reject pipes where a terminal-output plugin
+is followed by another plugin. Dataset generation also rejects prefixes/suffixes,
+nonempty composable document permutations, and a missing
+`--include-standalone-inputs` flag. These checks run before generation; no requested
+plugin or document permutations are silently excluded.
+
+For a standalone-only seed folder, keep `base_user_inputs.jsonl`,
+`jailbreaks.jsonl` and `instructions.jsonl` present but empty, and place your entries
+in `standalone_user_inputs.jsonl`. Alternatively, existing instruction/jailbreak
+filters can exclude the composable entries.
+
+Typical startup errors identify:
+
+- A terminal plugin that must be the last element of a pipe.
+- Terminal plugins incompatible with prefixes/suffixes (`--include-fixes`).
+- Terminal plugins that cannot be applied to document entries.
+- Terminal plugins that require `--include-standalone-inputs`.
+- Terminal plugins that require `--plugin-only`, so untransformed entries are not
+  added to the dataset alongside artifact references.
+
+Document Forge failures abort either generation command with exit code 1 and an
+error message, in both serial and multithreaded (`--threads`) generation. Already-created artifacts are not rolled back. Other plugins keep
+their existing warning-and-skip behaviour unless they opt into `FatalPluginError`.
+`exclude_patterns` is ignored because Document Forge embeds the original payload
+without performing text transformations.
 
 `document_artifact` is an integrity-check target:
 
 ```sh
 spikee test --dataset datasets/your-generated-dataset.jsonl --target document_artifact --threads 1 --no-auto-resume
 ```
+
+The target returns `(True, metadata)` for an intact file, or `(False, metadata)`
+for an invalid reference, malformed record, or missing/altered file. Failure
+metadata contains `reason`; success metadata contains the original `record`.
+Nonempty target options remain configuration errors. Spikee uses the boolean
+directly, so the reported success rate measures artifact integrity.
 
 Integrity validation is not a prompt-injection success result. To evaluate an
 application, implement a target that reads the artifact record, uploads the file
@@ -110,6 +140,14 @@ through that application's interface, and returns its response to your judges.
   visual approval. `visual_review` in each sidecar records this limitation.
 
 ## Development
+
+`spikee/plugins/document_forge.py` owns configuration and generation orchestration.
+Its helpers live under `spikee/utilities/documents/`: `placement.py` and
+`sections.py` select locations through Spikee providers; `pdf.py`, `docx.py`, and
+`images.py` handle formats; `artifacts.py` handles output references and hashes.
+The private `_progress.py` helper keeps provider-wait messages off standard output.
+Optional document libraries load when generation starts, so plugin discovery
+does not require the `documents` extra.
 
 ```sh
 python -m unittest discover -s tests/document_forge -v
