@@ -1,0 +1,9 @@
+{
+  "source": "template.pdf",
+  "position": "llm",
+  "field": "Project milestones",
+  "model": "provider/model",
+  "technique": "visible_text",
+  "output_dir": "generated-files/document-forge",
+  "cache_dir": "generated-files/document-cache"
+}

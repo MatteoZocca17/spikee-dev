@@ -49,6 +49,7 @@ Developed by Reversec Labs, `spikee` is a toolkit for assessing the resilience o
 - [Questions or Feedback?](#questions-or-feedback)
 
 ## Documentation
+- [Document Forge: embed instructions into PDF/DOCX templates](./docs/document_forge.md)
 - [Guides](./docs/README.md#guides)
 - [Reference Pages](./docs/README.md#reference-pages)
 - [Generation and Testing Workflows](./docs/README.md#generation-and-testing-workflows)

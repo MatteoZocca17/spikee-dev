@@ -14,3 +14,6 @@ llmwebmail-test
 .sonar
 .kilo
 .kilo/*
+
+# Document Forge outputs can contain private template text.
+generated-files/
