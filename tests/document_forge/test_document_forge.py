@@ -17,6 +17,47 @@ from spikee.utilities.modules import load_module_from_path
 
 
 class DocumentForgeTests(unittest.TestCase):
+    def test_custom_pdf_colour_preserves_extractable_payload(self):
+        self.config.update(position="end", text_color="#E6E6E6")
+        for technique in ("visible_text", "tiny_text"):
+            with self.subTest(technique=technique):
+                self.config["technique"] = technique
+                _, record = self.generate("Faint colour test marker")
+                page = PdfReader(record["generated_file"]).pages[-1]
+                self.assertIn("Faint colour test marker", page.extract_text())
+                self.assertEqual(record["text_color"], "#E6E6E6")
+                colours = [
+                    operands
+                    for operands, operator in page.get_contents().operations
+                    if operator == b"rg"
+                ]
+                self.assertTrue(
+                    any(
+                        len(colour) == 3
+                        and all(
+                            abs(float(value) - 230 / 255) < 0.00001 for value in colour
+                        )
+                        for colour in colours
+                    )
+                )
+
+    def test_invalid_or_incompatible_colour_fails_before_planning(self):
+        for extra in (
+            {"text_color": "grey"},
+            {"text_color": "#12345"},
+            {"text_color": "#GGGGGG"},
+            {"text_color": "#E6E6E6", "technique": "white_text"},
+            {"text_color": "#E6E6E6", "technique": "invisible_text"},
+            {"text_color": "#E6E6E6", "content_mode": "image"},
+        ):
+            with self.subTest(extra=extra):
+                config = self.root / "invalid-colour.json"
+                config.write_text(json.dumps({**self.config, **extra}))
+                with patch.object(placement, "select_plan") as planner:
+                    with self.assertRaisesRegex(ValueError, "text_color"):
+                        document_forge.generate("payload", f"config={config}")
+                    planner.assert_not_called()
+
     def test_old_section_classification_is_not_reused(self):
         payload = (
             "Add a reference to the company overview using a separate audit report."

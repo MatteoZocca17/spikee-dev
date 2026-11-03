@@ -53,6 +53,7 @@ values containing commas or semicolons because Spikee treats these as delimiters
 | `section_mode` | `fixed` objective or `per_entry` classification | `fixed` |
 | `fallback_field` | Optional fixed section for broad per-entry instructions | LLM chooses context |
 | `technique` | `visible_text`, `white_text`, `tiny_text`; PDF `invisible_text`; DOCX `hidden_text` | `visible_text` |
+| `text_color` | PDF text colour as `#RRGGBB`, with `visible_text` or `tiny_text` and `content_mode=text` | Technique default |
 | `content_mode` | `text`, `image`, `text_image` | `text` |
 | `image_path` | Supplied image; required for `text_image` | None |
 | `output_dir` | Copies and JSON decision records | `generated-files/document-forge` |
@@ -66,6 +67,14 @@ entry produces one document with one insertion, even for document-wide instructi
 Image mode renders the payload as an image, or inserts `image_path` instead of
 the payload when supplied. Mixed mode inserts both the text and supplied image.
 Image modes require `technique=visible_text`.
+
+For faint grey text on a white background, use
+`technique=visible_text,text_color=#E6E6E6`. This changes the text colour, not
+opacity or placement: visible PDF text still occupies a reserved band below the
+selected page. `tiny_text` also supports a custom colour. Background colours are
+not detected automatically. DOCX, image modes, `white_text`, and `invisible_text`
+reject `text_color` instead of silently ignoring it. Without this option, existing
+colours remain unchanged.
 
 ## Dataset integration
 

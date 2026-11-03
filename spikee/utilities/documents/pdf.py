@@ -62,7 +62,11 @@ def _wrap_text(text: str, font: str, size: float, width: float) -> list[str]:
 
 
 def _pdf_overlay(
-    width: float, height: float, payload: str, technique: str
+    width: float,
+    height: float,
+    payload: str,
+    technique: str,
+    text_color: str | None = None,
 ) -> PdfReader:
     stream = io.BytesIO()
     pdf = canvas.Canvas(stream, pagesize=(width, height), pageCompression=1)
@@ -84,7 +88,9 @@ def _pdf_overlay(
     text = pdf.beginText(x, y)
     text.setFont(font, size)
     text.setLeading(leading)
-    if technique == "invisible_text":
+    if text_color is not None:
+        text.setFillColorRGB(*(int(text_color[i : i + 2], 16) / 255 for i in (1, 3, 5)))
+    elif technique == "invisible_text":
         text.setTextRenderMode(3)
     elif technique == "white_text":
         text.setFillColorRGB(1, 1, 1)
@@ -101,7 +107,9 @@ def _pdf_overlay(
     return PdfReader(stream)
 
 
-def _add_visible_pdf_text(page: Any, payload: str) -> tuple[float, list[str]]:
+def _add_visible_pdf_text(
+    page: Any, payload: str, text_color: str | None = None
+) -> tuple[float, list[str]]:
     """Reserve new space outside all original content, including graphics.
 
     Extending below the media box avoids exposing previously cropped content.
@@ -139,7 +147,7 @@ def _add_visible_pdf_text(page: Any, payload: str) -> tuple[float, list[str]]:
             + [([], b"Q")]
         )
         page.replace_contents(contents)
-    overlay = _pdf_overlay(width, band_height, payload, "visible_text")
+    overlay = _pdf_overlay(width, band_height, payload, "visible_text", text_color)
     page.merge_transformed_page(
         overlay.pages[0],
         Transformation().translate(float(crop.left), bottom),
@@ -173,6 +181,7 @@ def _inject_pdf(
     page: str | None,
     anchor: str | None,
     occurrence: int,
+    text_color: str | None = None,
 ) -> dict[str, Any]:
     if technique not in PDF_TECHNIQUES:
         raise ValueError(
@@ -193,7 +202,7 @@ def _inject_pdf(
     band_height = None
     expected_payload = payload
     if technique == "visible_text":
-        band_height, lines = _add_visible_pdf_text(selected_page, payload)
+        band_height, lines = _add_visible_pdf_text(selected_page, payload, text_color)
         expected_payload = "\n".join(lines)
     else:
         if selected_page.rotation:
@@ -205,6 +214,7 @@ def _inject_pdf(
             float(crop.height),
             payload,
             technique,
+            text_color,
         )
         selected_page.merge_transformed_page(
             overlay.pages[0],

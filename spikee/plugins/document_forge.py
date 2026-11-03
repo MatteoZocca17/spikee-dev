@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -56,6 +57,7 @@ ALLOWED = {
     "anchor_occurrence",
     "relative",
     "technique",
+    "text_color",
     "content_mode",
     "image_path",
     "output_dir",
@@ -127,6 +129,16 @@ def generate(payload, option_string):
     )
     if technique not in allowed:
         raise ValueError(f"technique must be one of {sorted(allowed)}")
+    text_color = options.get("text_color")
+    if text_color is not None:
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", text_color):
+            raise ValueError("text_color must be a hex colour such as #E6E6E6")
+        if source.suffix.lower() != ".pdf" or mode != "text":
+            raise ValueError(
+                "text_color currently requires a PDF with content_mode=text"
+            )
+        if technique not in ("visible_text", "tiny_text"):
+            raise ValueError("text_color requires technique=visible_text or tiny_text")
     if mode != "text" and technique != "visible_text":
         raise ValueError(
             "Image modes require technique=visible_text; hidden images are unsupported"
@@ -170,6 +182,7 @@ def generate(payload, option_string):
                     str(plan["unit_id"]),
                     None,
                     1,
+                    text_color=text_color,
                 )
             if png is not None:
                 writer = PdfWriter(
@@ -196,6 +209,7 @@ def generate(payload, option_string):
             "plan": plan,
             "entry_section": entry_section,
             "technique": technique,
+            "text_color": text_color,
             "content_mode": mode,
             "image_path": str(image_path) if image_path else None,
             "validation": "structure-and-image-presence"
