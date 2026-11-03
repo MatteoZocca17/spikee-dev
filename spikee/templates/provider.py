@@ -1,6 +1,8 @@
 import asyncio
 import gc
 import os
+import threading
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
@@ -8,6 +10,8 @@ from typing import Any
 from spikee.templates.module import Module
 from spikee.utilities.hinting import ModuleOptionsHint, get_content
 from spikee.utilities.llm_message import AIMessage, Message, MessageHint
+
+_RUNNER_CREATION_LOCK = threading.Lock()
 
 
 class ProviderError(Exception):
@@ -135,7 +139,16 @@ class Provider(Module, ABC):
         )
 
     def async_call(self, fun: Callable, **params) -> Any:
-        """Run one request, then cancel leftover tasks instead of awaiting them."""
+        """Reuse the client's loop without waiting for unrelated background tasks."""
+        # Providers commonly retain an async HTTP client between invocations.
+        # Its connection pool must keep using the same event loop.
+        with _RUNNER_CREATION_LOCK:
+            if not hasattr(self, "_async_runner"):
+                self._async_runner = asyncio.Runner()
+                self._async_call_lock = threading.Lock()
+                self._async_runner_cleanup = weakref.finalize(
+                    self, self._async_runner.close
+                )
 
         async def run_request() -> Any:
             try:
@@ -143,9 +156,9 @@ class Provider(Module, ABC):
                     fun(**params), timeout=self.default_timeout
                 )
             finally:
-                # Schedule client finalizers before asyncio.run cancels pending
-                # tasks and closes the loop. Do not wait for unrelated work to
-                # finish naturally after the response has already arrived.
                 gc.collect()
 
-        return asyncio.run(run_request())
+        # One client cannot run concurrently on its loop from several threads.
+        # Separate provider instances retain independent runners.
+        with self._async_call_lock:
+            return self._async_runner.run(run_request())
