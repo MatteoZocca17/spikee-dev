@@ -138,7 +138,8 @@ through that application's interface, and returns its response to your judges.
 - Set `SPIKEE_API_TIMEOUT` (seconds) to bound the provider request, including
   client retries. The shared provider bridge reuses the client event loop across requests
   and does not wait for unrelated background tasks after a response. Pending
-  tasks are cancelled when the provider is released.
+  tasks are cancelled when the provider is released, after closing its AnyLLM
+  client on the same loop. Client cleanup has a five-second timeout.
   Cancellation cleanup can extend the elapsed time; this is not a hard process
   deadline. Without this setting, no request deadline is added by the bridge.
 - Artifact records use absolute local paths. Moving artifacts between machines

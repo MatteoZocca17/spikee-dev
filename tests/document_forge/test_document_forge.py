@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -16,6 +17,30 @@ from spikee.utilities.modules import load_module_from_path
 
 
 class DocumentForgeTests(unittest.TestCase):
+    def test_old_section_classification_is_not_reused(self):
+        payload = (
+            "Add a reference to the company overview using a separate audit report."
+        )
+        model = "mock/model"
+        cache = self.root / "cache"
+        cache.mkdir()
+        old_key = hashlib.sha256(json.dumps([2, model, payload]).encode()).hexdigest()
+        old = {
+            "scope": "section",
+            "section": "audit",
+            "reason": "Old source/output confusion",
+        }
+        (cache / f"section-{old_key}.json").write_text(json.dumps(old))
+        corrected = {**old, "section": "company_overview", "reason": "Output section"}
+        fake = SimpleNamespace(
+            invoke=lambda messages: SimpleNamespace(content=json.dumps(corrected))
+        )
+        with patch.object(sections, "get_llm", return_value=fake) as get:
+            result = sections.classify_section(payload, model, cache)
+            self.assertEqual(result["section"], "company_overview")
+            self.assertEqual(sections.classify_section(payload, model, cache), result)
+            self.assertEqual(get.call_count, 1)
+
     def test_long_page_excerpt_maps_back_to_original_page(self):
         index = {
             "source_sha256": "synthetic",

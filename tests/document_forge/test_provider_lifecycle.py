@@ -1,13 +1,15 @@
 """Regression coverage for the provider bridge used by document planning."""
 
 import asyncio
+import gc
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from unittest.mock import patch
 
-import httpx
+from openai import AsyncOpenAI
 
 from spikee.templates.provider import Provider
 
@@ -98,19 +100,24 @@ class ProviderLifecycleTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        client = httpx.AsyncClient(trust_env=False)
+        client = AsyncOpenAI(api_key="test-only", max_retries=0)
+        provider = StubProvider()
+        provider.llm = SimpleNamespace(client=client)
         try:
             with patch.dict("os.environ", {"SPIKEE_API_TIMEOUT": "5"}):
                 for _ in range(3):
-                    response = self.provider.async_call(
-                        client.get, url=f"http://127.0.0.1:{server.server_port}/"
+                    response = provider.async_call(
+                        client._client.get,
+                        url=f"http://127.0.0.1:{server.server_port}/",
                     )
                     self.assertEqual(response.text, "ok")
         finally:
-            self.provider.async_call(client.aclose)
+            del provider
+            gc.collect()
             server.shutdown()
             server.server_close()
             thread.join()
+        self.assertTrue(client.is_closed())
 
     def test_exception_is_preserved_and_next_call_works(self):
         async def fail():

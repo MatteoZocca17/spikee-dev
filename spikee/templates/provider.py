@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import inspect
 import os
 import threading
 import weakref
@@ -12,6 +13,23 @@ from spikee.utilities.hinting import ModuleOptionsHint, get_content
 from spikee.utilities.llm_message import AIMessage, Message, MessageHint
 
 _RUNNER_CREATION_LOCK = threading.Lock()
+
+
+def _close_provider_runner(runner, client):
+    """Close pooled connections on their owning loop before closing the loop."""
+
+    async def close_client():
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is not None:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+    try:
+        if client is not None:
+            runner.run(asyncio.wait_for(close_client(), timeout=5))
+    finally:
+        runner.close()
 
 
 class ProviderError(Exception):
@@ -146,8 +164,9 @@ class Provider(Module, ABC):
             if not hasattr(self, "_async_runner"):
                 self._async_runner = asyncio.Runner()
                 self._async_call_lock = threading.Lock()
+                client = getattr(getattr(self, "llm", None), "client", None)
                 self._async_runner_cleanup = weakref.finalize(
-                    self, self._async_runner.close
+                    self, _close_provider_runner, self._async_runner, client
                 )
 
         async def run_request() -> Any:
