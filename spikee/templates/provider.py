@@ -135,46 +135,17 @@ class Provider(Module, ABC):
         )
 
     def async_call(self, fun: Callable, **params) -> Any:
+        """Run one request, then cancel leftover tasks instead of awaiting them."""
 
-        async def run_async_call(fun: Callable, **params) -> Any:
-            result = await fun(**params)
-
-            # Force GC to trigger any pending __del__ finalizers (e.g. httpx AsyncClient)
-            # so their cleanup coroutines are scheduled before we gather and the loop stops.
-            gc.collect()
-
-            # Drain pending httpx cleanup tasks
-            pending = [
-                t
-                for t in asyncio.all_tasks()
-                if t is not asyncio.current_task() and not t.done()
-            ]
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-            return result
-
-        # Use explicit loop management instead of asyncio.run().
-        # asyncio.run() closes the loop after completion, but httpx AsyncClient
-        # __del__ finalizers may fire later and try to schedule cleanup on the
-        # closed loop, causing "Event loop is closed" RuntimeError on Python 3.14+.
-        # By not closing the loop, these finalizers can call_soon() harmlessly.
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(run_async_call(fun, **params))
-        finally:
+        async def run_request() -> Any:
             try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            except RuntimeError:
-                pass
-            try:
-                loop.run_until_complete(loop.shutdown_default_executor())
-            except RuntimeError:
-                pass
-            # NOTE: Intentionally NOT calling loop.close().
-            # httpx AsyncClient.__del__ finalizers may fire after this point
-            # and call loop.call_soon() to schedule aclose(). If the loop is
-            # closed, this raises RuntimeError on Python 3.14+. Leaving it
-            # open lets them queue harmlessly (the callbacks never run, but
-            # it's just TCP connection cleanup that the OS handles anyway).
+                return await asyncio.wait_for(
+                    fun(**params), timeout=self.default_timeout
+                )
+            finally:
+                # Schedule client finalizers before asyncio.run cancels pending
+                # tasks and closes the loop. Do not wait for unrelated work to
+                # finish naturally after the response has already arrived.
+                gc.collect()
+
+        return asyncio.run(run_request())

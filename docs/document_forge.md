@@ -135,6 +135,11 @@ through that application's interface, and returns its response to your judges.
 - Scanned PDFs need OCR before LLM placement. The planner uses text, not vision.
   Large files are reviewed in bounded batches; the first run can require multiple
   provider calls. Provider errors stop generation without automatic retries.
+- Set `SPIKEE_API_TIMEOUT` (seconds) to bound the provider request, including
+  client retries. The shared provider bridge cancels leftover asynchronous tasks
+  after the request returns rather than waiting for them to finish naturally.
+  Cancellation cleanup can extend the elapsed time; this is not a hard process
+  deadline. Without this setting, no request deadline is added by the bridge.
 - Artifact records use absolute local paths. Moving artifacts between machines
   requires updating references. Output has structural/text checks, not automatic
   visual approval. `visual_review` in each sidecar records this limitation.
