@@ -8,6 +8,23 @@ from pathlib import Path
 PREFIX = "SPIKEE_DOCUMENT_V1:"
 
 
+def read_plugin_config(option_string, allowed):
+    """Read a JSON config with CLI overrides using standard Spikee options."""
+    from spikee.utilities.modules import parse_options
+
+    cli = parse_options(option_string)
+    options = {}
+    if cli.get("config"):
+        options = json.loads(Path(cli["config"]).read_text(encoding="utf-8"))
+        if not isinstance(options, dict):
+            raise ValueError("Plugin config must be a JSON object")
+    options.update(cli)
+    unknown = set(options) - allowed - {"config"}
+    if unknown:
+        raise ValueError(f"Unknown plugin options: {sorted(unknown)}")
+    return options
+
+
 def encode(record):
     return PREFIX + json.dumps(record, ensure_ascii=True)
 
